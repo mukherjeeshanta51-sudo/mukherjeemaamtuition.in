@@ -365,6 +365,11 @@
                     <div id="teacher-enrollments" class="space-y-2 max-h-96 overflow-y-auto pr-2"></div>
                 </div>
 
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                    <h3 class="font-bold text-slate-900 text-lg">Payments to Confirm</h3>
+                    <div id="teacher-payments" class="space-y-2 max-h-96 overflow-y-auto pr-2"></div>
+                </div>
+
                 <!-- RECORD STUDENT RESULTS -->
                 <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                     <h3 class="font-bold text-slate-900 text-lg flex items-center gap-2">
@@ -520,6 +525,10 @@
                     <input type="text" id="mat-link" placeholder="https://example.com/file.pdf (optional if you upload a file)" class="w-full px-3 py-2 border rounded-lg outline-none">
                 </div>
                 <div>
+                    <label class="block font-semibold mb-1">Price in ₹ (0 = free)</label>
+                    <input type="number" id="mat-price" value="0" min="0" class="w-full px-3 py-2 border rounded-lg outline-none">
+                </div>
+                <div>
                     <label class="block font-semibold mb-1">Or upload a file (PDF, Word, PowerPoint, image)</label>
                     <input type="file" id="mat-file" accept=".pdf,.doc,.docx,.ppt,.pptx,image/*" class="w-full text-xs">
                 </div>
@@ -553,6 +562,7 @@
             <h3 class="font-bold text-slate-900 text-lg">Login / Sign up</h3>
             <div class="space-y-3 text-sm">
                 <input type="text" id="auth-name" placeholder="Full name (for sign up)" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-brand-500">
+                <select id="auth-grade" class="w-full px-3 py-2 border rounded-lg outline-none"><option value="">Your class (for sign up)</option><option>Class 8</option><option>Class 9</option><option>Class 10</option><option>Class 11</option></select>
                 <input type="email" id="auth-email" placeholder="Email" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-brand-500">
                 <input type="password" id="auth-password" placeholder="Password (min 6 characters)" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-brand-500">
                 <div class="grid grid-cols-2 gap-2">
@@ -560,6 +570,29 @@
                     <button onclick="authSubmit('signup')" class="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-2 rounded-lg">Sign up</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="modal-pay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-6 space-y-3 shadow-2xl relative text-sm">
+            <button onclick="closeModal('modal-pay')" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600">✕</button>
+            <h3 class="font-bold text-slate-900 text-lg">Unlock this material</h3>
+            <p id="pay-title" class="font-semibold text-slate-700"></p>
+            <p class="text-slate-600">Pay by UPI to: <span id="pay-upi" class="font-bold select-all"></span></p>
+            <a id="pay-link" href="#" class="block text-center bg-brand-600 text-white font-bold py-2 rounded-lg">Pay with UPI app</a>
+            <input type="hidden" id="pay-material-id">
+            <input type="text" id="pay-ref" placeholder="UPI transaction ID after paying" class="w-full px-3 py-2 border rounded-lg outline-none">
+            <button onclick="submitPay()" class="w-full bg-emerald-600 text-white font-bold py-2 rounded-lg">I have paid</button>
+            <p class="text-xs text-slate-500">The teacher confirms your payment, then the file unlocks.</p>
+        </div>
+    </div>
+
+    <div id="modal-grade" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-6 space-y-3 shadow-2xl text-sm">
+            <h3 class="font-bold text-slate-900 text-lg">Choose your class</h3>
+            <p class="text-slate-600">You will see study material for this class only. Ask your teacher if you need to change it later.</p>
+            <select id="grade-pick" class="w-full px-3 py-2 border rounded-lg"><option>Class 8</option><option>Class 9</option><option>Class 10</option><option>Class 11</option></select>
+            <button onclick="saveGrade()" class="w-full bg-brand-600 text-white font-bold py-2 rounded-lg">Save</button>
         </div>
     </div>
 
@@ -643,9 +676,11 @@
         /* ---------- SUPABASE DATA LAYER ---------- */
         const SUPABASE_URL = 'https://fcqpxacstmdcfifwtdvq.supabase.co';       // paste your Project URL here
         const SUPABASE_ANON_KEY = 'sb_publishable_GDKDWiwhY-pc0CB2he-PqQ_XB8wDBSM';  // paste your anon public key here
-        let dbh = null, isAdmin = false, authUser = null;
+        const UPI_ID = 'shanta.mukherjee@ptaxis';  // your UPI ID, e.g. name@okbank
+        const UPI_NAME = 'Mukherjee Maam Tuition';
+        let dbh = null, isAdmin = false, authUser = null, myGrade = null, UNLOCKS = [];
         const ALLOWED = {
-            materials: ['title', 'cls', 'subject', 'date', 'link'],
+            materials: ['title', 'cls', 'subject', 'date', 'link', 'price', 'file_path'],
             announcements: ['title', 'body', 'date'],
             results: ['student', 'title', 'subject', 'date', 'score', 'status']
         };
@@ -661,6 +696,9 @@
             const en = await dbh.from('enrollments').select('*').order('created_at', { ascending: false });
             state.enrollments = en.error ? [] : en.data;
             renderEnrollments();
+            const un = await dbh.from('unlocks').select('*').order('created_at', { ascending: false });
+            UNLOCKS = un.error ? [] : un.data;
+            renderMaterials(); renderPayments();
         }
 
         async function uploadMatFile() {
@@ -669,7 +707,75 @@
             const path = Date.now() + '-' + f.name.replace(/[^\w.\-]+/g, '_');
             const { error } = await dbh.storage.from('materials').upload(path, f, { contentType: f.type });
             if (error) { showToast('Upload failed: ' + error.message, 'error'); return ''; }
-            return dbh.storage.from('materials').getPublicUrl(path).data.publicUrl;
+            return path;
+        }
+
+
+        const matState = m => {
+            if (isAdmin || !(m.price > 0)) return 'free';
+            const u = UNLOCKS.find(x => x.material_id === m.id && x.user_id === authUser?.id);
+            return u ? (u.status === 'approved' ? 'free' : 'pending') : 'locked';
+        };
+
+        async function openMaterial(id) {
+            const m = state.materials.find(x => x.id === id);
+            if (dbh && !authUser) { showToast('Please log in first.'); return openModal('modal-auth'); }
+            const st = matState(m);
+            if (st === 'locked') return openPay(id);
+            if (st === 'pending') return showToast("Your payment is waiting for the teacher's confirmation.");
+            if (m.file_path) {
+                const w = window.open('', '_blank');
+                const { data, error } = await dbh.storage.from('materials').createSignedUrl(m.file_path, 120);
+                if (error) { if (w) w.close(); return showToast('Could not open file: ' + error.message, 'error'); }
+                if (w) w.location = data.signedUrl; else location.href = data.signedUrl;
+            } else if (m.link && m.link !== '#') window.open(m.link, '_blank', 'noopener');
+            else showToast('No file attached to this material yet.', 'error');
+        }
+
+        function openPay(id) {
+            const m = state.materials.find(x => x.id === id);
+            document.getElementById('pay-material-id').value = id;
+            document.getElementById('pay-title').innerText = m.title + ' — ₹' + m.price;
+            document.getElementById('pay-upi').innerText = UPI_ID || 'Ask your teacher for the UPI ID';
+            const a = document.getElementById('pay-link');
+            a.style.display = UPI_ID ? 'block' : 'none';
+            a.href = 'upi://pay?pa=' + UPI_ID + '&pn=' + encodeURIComponent(UPI_NAME) + '&am=' + m.price + '&cu=INR&tn=' + encodeURIComponent(m.title.slice(0, 30));
+            openModal('modal-pay');
+        }
+
+        async function submitPay() {
+            const ref = document.getElementById('pay-ref').value.trim();
+            if (ref.length < 6) return showToast('Enter the UPI transaction ID (at least 6 characters).', 'error');
+            const { error } = await dbh.from('unlocks').insert({ user_id: authUser.id, student: studentName(), material_id: Number(document.getElementById('pay-material-id').value), ref });
+            if (error) return showToast(error.code === '23505' ? 'You have already submitted payment for this.' : error.message, 'error');
+            closeModal('modal-pay'); document.getElementById('pay-ref').value = '';
+            await loadData(); showToast('Submitted! The teacher will confirm your payment.');
+        }
+
+        function renderPayments() {
+            const t = document.getElementById('teacher-payments');
+            if (!t) return;
+            const pend = UNLOCKS.filter(u => u.status === 'pending');
+            t.innerHTML = pend.length ? pend.map(u => `
+                <div class="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-2">
+                    <p><span class="font-bold text-slate-800">${u.student}</span> • ${state.materials.find(m => m.id === u.material_id)?.title || ''}</p>
+                    <p class="text-slate-500">UPI ref: ${u.ref} • ₹${state.materials.find(m => m.id === u.material_id)?.price || ''}</p>
+                    <div class="flex gap-2"><button onclick="reviewPay(${u.id}, true)" class="bg-emerald-600 text-white font-bold px-3 py-1 rounded">Approve</button><button onclick="reviewPay(${u.id}, false)" class="bg-rose-100 text-rose-700 font-bold px-3 py-1 rounded">Reject</button></div>
+                </div>`).join('') : '<p class="text-xs text-slate-500">No payments waiting.</p>';
+        }
+
+        async function reviewPay(id, ok) {
+            const q = ok ? dbh.from('unlocks').update({ status: 'approved' }).eq('id', id) : dbh.from('unlocks').delete().eq('id', id);
+            const { error } = await q;
+            if (error) return showToast(error.message, 'error');
+            await loadData(); showToast(ok ? 'Payment approved.' : 'Payment rejected.');
+        }
+
+        async function saveGrade() {
+            const grade = document.getElementById('grade-pick').value;
+            const { error } = await dbh.from('student_profiles').insert({ user_id: authUser.id, name: studentName(), grade });
+            if (error) return showToast(error.message, 'error');
+            closeModal('modal-grade'); await refreshAuth(); showToast('Grade saved: ' + grade);
         }
 
         const isEnrolled = id => (state.enrollments || []).some(e => e.course_id === id && e.user_id === authUser?.id);
@@ -678,6 +784,10 @@
             if (!dbh) return showToast('Enrollment needs the live database.', 'error');
             if (!authUser) { showToast('Please log in or sign up to enroll.'); return openModal('modal-auth'); }
             const c = DEFAULT_COURSES.find(x => x.id === id);
+            if (!isAdmin) {
+                if (myGrade && myGrade !== c.class) return showToast('You are enrolled in ' + myGrade + '. This course is for ' + c.class + '.', 'error');
+                if (!myGrade) { const g = await dbh.from('student_profiles').insert({ user_id: authUser.id, name: studentName(), grade: c.class }); if (g.error) return showToast(g.error.message, 'error'); myGrade = c.class; }
+            }
             const { error } = await dbh.from('enrollments').insert({ user_id: authUser.id, student: studentName(), course_id: c.id, course_title: c.title, board: c.board, cls: c.class, time: c.time });
             if (error) return showToast(error.code === '23505' ? 'You are already enrolled in this course.' : error.message, 'error');
             await loadData();
@@ -704,7 +814,7 @@
                     <button onclick="unenroll(${e.id})" class="text-[11px] text-rose-600 font-semibold hover:underline">Remove</button>
                 </div>`).join('') : '<p class="text-sm text-slate-500 col-span-full">You have not enrolled in any course yet. Open Courses and click Enroll Now.</p>';
             const badge = document.getElementById('enrolled-badge');
-            if (badge) badge.innerText = 'Enrolled: ' + mine.length + (mine.length === 1 ? ' course' : ' courses');
+            if (badge) badge.innerText = myGrade ? 'Grade: ' + myGrade : 'Grade not set';
             const t = document.getElementById('teacher-enrollments');
             if (t) t.innerHTML = list.length ? list.map(e => `
                 <div class="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs flex justify-between gap-2">
@@ -722,11 +832,14 @@
                 const t = await dbh.from('teachers').select('user_id').eq('user_id', authUser.id).maybeSingle();
                 isAdmin = !!t.data;
             }
+            myGrade = null;
+            if (authUser && !isAdmin) { const g = await dbh.from('student_profiles').select('grade').eq('user_id', authUser.id).maybeSingle(); myGrade = g.data?.grade || null; }
             document.querySelectorAll('.auth-btn').forEach(b => b.innerText = authUser ? 'Sign out' : 'Login');
             document.querySelectorAll('.welcome-name').forEach(e => e.innerText = authUser ? studentName() : 'Student');
             const text = document.getElementById('db-status-text');
             if (text) text.innerText = isAdmin ? 'Live • Teacher' : (authUser ? 'Live • Student' : 'Live • Guest');
             await loadData();
+            if (authUser && !isAdmin && !myGrade) openModal('modal-grade');
         }
 
         async function dbPut(name, item) {
@@ -757,8 +870,10 @@
             const email = document.getElementById('auth-email').value.trim();
             const password = document.getElementById('auth-password').value;
             const name = document.getElementById('auth-name').value.trim();
+            const grade = document.getElementById('auth-grade').value;
+            if (mode === 'signup' && !grade) return showToast('Please choose your class.', 'error');
             const r = mode === 'signup'
-                ? await dbh.auth.signUp({ email, password, options: { data: { full_name: name } } })
+                ? await dbh.auth.signUp({ email, password, options: { data: { full_name: name, grade } } })
                 : await dbh.auth.signInWithPassword({ email, password });
             if (r.error) return showToast(r.error.message, 'error');
             closeModal('modal-auth');
@@ -902,17 +1017,17 @@
                             <div class="flex items-center gap-2">
                                 <span class="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded">${m.class}</span>
                                 <span class="bg-brand-50 text-brand-600 text-[10px] font-bold px-2 py-0.5 rounded">${m.subject}</span>
+                                ${m.price > 0 ? `<span class="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded">₹${m.price}</span>` : `<span class="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded">Free</span>`}
                             </div>
                             <h4 class="font-bold text-slate-800 text-sm">${m.title}</h4>
                         </div>
                         <div class="flex items-center justify-between text-xs pt-2 border-t border-slate-100">
                             <span class="text-slate-400">${m.date}</span>
-                            <a ${m.link && m.link !== '#' ? `href="${m.link}" target="_blank" rel="noopener"` : `href="#" onclick="event.preventDefault(); showToast('No file attached to this material yet.', 'error');"`} class="text-brand-600 font-bold hover:underline flex items-center gap-1">
-                                <i data-lucide="download" class="w-3.5 h-3.5"></i> Download PDF
-                            </a>
+                            <button onclick="openMaterial(${m.id})" class="text-brand-600 font-bold hover:underline flex items-center gap-1">${{ free: 'Download', locked: 'Unlock ₹' + m.price, pending: 'Payment pending' }[matState(m)]}</button>
                         </div>
                     </div>
                 `).join('');
+                if (dbh && !filtered.length) container.innerHTML = '<p class="text-sm text-slate-500 col-span-full">' + (!authUser ? 'Log in with your student account to see study material for your grade.' : isAdmin ? 'No materials yet.' : myGrade ? 'No study material for ' + myGrade + ' yet.' : 'Choose your grade to see study material.') + '</p>';
             }
 
             if (teacherList) {
@@ -935,6 +1050,7 @@
 
         async function handleAddMaterial(e) {
             e.preventDefault();
+            if (dbh && Number(document.getElementById('mat-price').value) > 0 && !document.getElementById('mat-file').files[0]) return showToast('Paid material must be an uploaded file, not a link.', 'error');
             const form = e.target;
             const newItem = {
                 id: Date.now(),
@@ -942,7 +1058,9 @@
                 class: document.getElementById('mat-class').value,
                 subject: document.getElementById('mat-subject').value,
                 date: new Date().toISOString().split('T')[0],
-                link: (await uploadMatFile()) || document.getElementById('mat-link').value || '#',
+                file_path: (await uploadMatFile()) || null,
+                price: Number(document.getElementById('mat-price').value) || 0,
+                link: document.getElementById('mat-link').value || '#',
                 createdAt: Date.now()
             };
             if (dbh) {
@@ -961,7 +1079,7 @@
         async function deleteMaterial(id) {
             if (dbh) {
                 if (!isAdmin) return denied();
-                try { await dbDelete('materials', id); } catch (err) { return showToast('Could not delete.', 'error'); }
+                try { const mm = state.materials.find(x => x.id === id); if (mm?.file_path) await dbh.storage.from('materials').remove([mm.file_path]); await dbDelete('materials', id); } catch (err) { return showToast('Could not delete.', 'error'); }
             } else {
                 state.materials = state.materials.filter(m => m.id !== id);
                 setStorage('materials', state.materials);
